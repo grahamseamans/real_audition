@@ -5,6 +5,7 @@ import sounddevice as sd
 import tkinter.filedialog
 import tkinter as tk
 from pathlib import Path
+from enum import Enum
 
 
 """
@@ -46,6 +47,8 @@ class File:
         else:
             self.mastering_data = self.data
 
+        # self.currently_playing = self.raw
+
     def get_lufs(self):
         meter = pyln.Meter(self.sample_rate)
         return meter.integrated_loudness(self.data)
@@ -54,17 +57,17 @@ class File:
         return pyln.normalize.loudness(self.data, self.lufs, new_loudness)
 
     def play(self, lufs_var, quietest, start_time, device=None):
-        match lufs_var:
+        match lufs_var.get():
             case "raw":
-                to_play = self.data
+                self.currently_playing = self.data
             case "mixing":
                 if quietest != self.mixing_lufs:
                     self.mixing_data = self.normalize_data(quietest)
                     self.mixing_lufs = quietest
-                to_play = self.mixing_data
+                self.currently_playing = self.mixing_data
             case "mastering":
-                to_play = self.mastering_data
-        to_play = to_play[int(start_time * self.sample_rate) :, :]
+                self.currently_playing = self.mastering_data
+        to_play = self.currently_playing[int(start_time * self.sample_rate) :, :]
         to_play = self.fade_in(to_play)
         sd.play(to_play, self.sample_rate, device=device)
 
@@ -74,7 +77,7 @@ class File:
         data[:fade_len, :] *= fade
         return data
 
-    def stop_play(self, position=0, device=None):
+    def stop_play(self):
         sd.stop()
 
     def get_string(self):
@@ -85,6 +88,11 @@ class File:
 
 class Player:
     def __init__(self):
+        self.current_track = -1
+        self.duration = Duration()
+        self.files = []
+        self.play_state = "stopped"
+
         self.root = tk.Tk()
         self.root.title("Music Player")
         self.root.geometry("920x600+290+85")
@@ -104,25 +112,29 @@ class Player:
         tk.Button(self.root, text="pause", command=self.pause).pack()
         tk.Button(self.root, text="stop", command=self.stop).pack()
 
-        self.lufs_var = tk.StringVar()
-        ra = tk.Radiobutton(
-            self.root, text="raw", variable=self.lufs_var, value="raw"
-        ).pack()
-        rb = tk.Radiobutton(
-            self.root, text="mixing", variable=self.lufs_var, value="mixing"
-        ).pack()
-        rp = tk.Radiobutton(
-            self.root,
-            text="mastering (-14 lufs)",
-            variable=self.lufs_var,
-            value="mastering",
-        ).pack()
-        self.lufs_var.trace_add("write", callback=self.play)
+        self.root.bind("<space>", lambda event: self.space_bar(event))
 
-        self.current_track = -1
-        self.duration = Duration()
-        self.files = []
+        self.lufs_var = tk.StringVar()
+        radio_values = {
+            "raw": "raw",
+            "mixing": "mixing",
+            "mastering (-14 lufs, no boost)": "mastering",
+        }
+        for text, value in radio_values.items():
+            tk.Radiobutton(
+                self.root, text=text, variable=self.lufs_var, value=value
+            ).pack()
+        self.lufs_var.trace_add("write", callback=lambda var, index, mode: self.play())
+        self.lufs_var.set("raw")
         self.update_play()
+
+    def space_bar(self, event):
+        print(self.play_state)
+        print(event)
+        if self.play_state == "stopped" or self.play_state == "paused":
+            self.play()
+        else:
+            self.pause()
 
     def run(self):
         self.root.mainloop()
@@ -147,31 +159,31 @@ class Player:
                 self.lufs_var, quietest, start_time=self.duration.duration
             )
             self.duration.start(sd.get_stream().time)
+            self.get_waveform()
+            self.play_state = "playing"
 
     def pause(self):
         self.current_track.stop_play()
+        self.play_state = "paused"
 
     def stop(self):
         self.duration.reset()
         self.current_track.stop_play()
         self.draw_waveform()
+        self.play_state = "stopped"
 
     def update_table(self):
         names = [file.string for file in self.files]
         self.table_strings_var.set(names)
 
     def track_select(self, selection):
-        # if not selection:
-        #     return
         self.current_track = self.files[selection[0]]
-        self.get_waveform()
-        self.draw_waveform()
         self.play()
 
     def get_waveform(self):
         width = self.waveform.winfo_width()
         height = self.waveform.winfo_height()
-        data = self.current_track.data
+        data = self.current_track.currently_playing
         maxes = np.amax(data, axis=1)
         self.bars = []
         for clump in np.array_split(maxes, width):
@@ -193,8 +205,9 @@ class Player:
 
     def update_play(self):
         try:
-            self.duration.update(sd.get_stream().time)
-            self.draw_waveform()
+            if self.play_state == "playing":
+                self.duration.update(sd.get_stream().time)
+                self.draw_waveform()
         except RuntimeError:
             pass
         except sd.PortAudioError:
