@@ -5,29 +5,14 @@ import sounddevice as sd
 import tkinter.filedialog
 import tkinter as tk
 from pathlib import Path
-from enum import Enum
+from ttkthemes import ThemedTk
 
 
 """
-so what does this need to do:
-we need t know hw far into the "songs" we are
-We can know this by being like: each time we've hit play and
-    - changed song
-    - paused and restarted
-That's how far into the song we are now
-    - end_time - start_time = duration played
-if we know the duration played then that's great:
-    - seeking changes duration played to wherever we click
-    - stopping changes duration played to 0
-
-make an update duration_played func
-    - takes in time,
-    - duration = curr_time - start_time
-
-We need to be able to go from duration played to depth of track.
-This is simple though, just multiply the duration played by the sample rate.
-start = duration * sample_rate
-from_pause = data[:, start:]
+what's left to do:
+- select ouputs
+- have spacebar work
+- less ugli?
 """
 
 
@@ -41,13 +26,7 @@ class File:
         self.lufs = self.get_lufs()
         self.string = self.get_string()
         self.length_secs = len(self.data) / self.sample_rate
-
-        if self.lufs > -14:
-            self.mastering_data = self.normalize_data(-14)
-        else:
-            self.mastering_data = self.data
-
-        # self.currently_playing = self.raw
+        self.mastering_data = self.normalize_data(-14) if self.lufs > -14 else self.data
 
     def get_lufs(self):
         meter = pyln.Meter(self.sample_rate)
@@ -93,39 +72,49 @@ class Player:
         self.files = []
         self.play_state = "stopped"
 
-        self.root = tk.Tk()
-        self.root.title("Music Player")
+        self.root = ThemedTk(theme="scidpink")
+        print(self.root.get_themes())
+        self.root.title("true audition")
         self.root.geometry("920x600+290+85")
-        self.root.configure(background="#212121")
-        tk.Button(self.root, text="load files", command=self.load_files).pack()
 
-        self.table_strings_var = tk.StringVar(value=[])
-        lbox = tk.Listbox(self.root, listvariable=self.table_strings_var)
-        lbox.pack(fill="both")
-        lbox.bind("<<ListboxSelect>>", lambda e: self.track_select(lbox.curselection()))
-
-        self.waveform = tk.Canvas(self.root)
-        self.waveform.pack(fill="both")
-        self.waveform.bind("<Button-1>", lambda event: self.seek(event.x))
-
-        tk.Button(self.root, text="play", command=self.play).pack()
-        tk.Button(self.root, text="pause", command=self.pause).pack()
-        tk.Button(self.root, text="stop", command=self.stop).pack()
-
-        self.root.bind("<space>", lambda event: self.space_bar(event))
-
+        top_pane = tk.Frame(self.root)
+        tk.Button(top_pane, text="load files", command=self.load_files).pack(
+            side="left"
+        )
         self.lufs_var = tk.StringVar()
         radio_values = {
             "raw": "raw",
             "mixing": "mixing",
-            "mastering (-14 lufs, no boost)": "mastering",
+            "mastering (-14 lufs, no boosting)": "mastering",
         }
         for text, value in radio_values.items():
             tk.Radiobutton(
-                self.root, text=text, variable=self.lufs_var, value=value
-            ).pack()
+                top_pane, text=text, variable=self.lufs_var, value=value
+            ).pack(side="right")
         self.lufs_var.trace_add("write", callback=lambda var, index, mode: self.play())
         self.lufs_var.set("raw")
+
+        mid_pane = tk.Frame(self.root)
+        self.table_strings_var = tk.StringVar(value=[])
+        lbox = tk.Listbox(mid_pane, listvariable=self.table_strings_var)
+        lbox.pack(fill="both")
+        lbox.bind("<<ListboxSelect>>", lambda e: self.track_select(lbox.curselection()))
+
+        self.waveform = tk.Canvas(mid_pane)
+        self.waveform.pack(fill="both")
+        self.waveform.bind("<Button-1>", lambda event: self.seek(event.x))
+
+        bottom_pane = tk.Frame(self.root)
+        tk.Button(bottom_pane, text="play", command=self.play).pack(side="left")
+        tk.Button(bottom_pane, text="pause", command=self.pause).pack(side="left")
+        tk.Button(bottom_pane, text="stop", command=self.stop).pack(side="left")
+
+        top_pane.pack(fill="x")
+        mid_pane.pack(fill="both")
+        bottom_pane.pack(fill="x")
+
+        self.root.bind("<space>", lambda event: self.space_bar(event))
+
         self.update_play()
 
     def space_bar(self, event):
@@ -147,6 +136,8 @@ class Player:
             except sf.LibsndfileError:
                 pass
         self.update_table()
+        if self.play_state == "playing":
+            self.play()
 
     def play(self):
         if not self.files:
@@ -163,10 +154,14 @@ class Player:
             self.play_state = "playing"
 
     def pause(self):
+        if self.play_state == "paused":
+            return
         self.current_track.stop_play()
         self.play_state = "paused"
 
     def stop(self):
+        if self.play_state == "stopped":
+            return
         self.duration.reset()
         self.current_track.stop_play()
         self.draw_waveform()
