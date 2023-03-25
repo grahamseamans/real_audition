@@ -14,7 +14,7 @@ class GUI:
 
         self.root = ThemedTk(theme="scidpink")
         self.root.title("true audition")
-        self.root.geometry("920x600+290+85")
+        self.root.geometry("920x500+290+85")
 
         top_pane = tk.Frame(self.root)
         tk.Button(top_pane, text="load files", command=self.load_files).pack(
@@ -34,23 +34,35 @@ class GUI:
             "write", callback=lambda var, index, mode: self.set_lufs_status()
         )
         self.lufs_var.set("raw")
+        self.status = tk.Text(top_pane, height=1, background="light blue")
+        self.status.pack(side="left")
 
         mid_pane = tk.Frame(self.root)
         self.table_strings_var = tk.StringVar(value=[])
-        lbox = tk.Listbox(mid_pane, listvariable=self.table_strings_var)
-        lbox.pack(fill="both")
-        lbox.bind("<<ListboxSelect>>", lambda e: self.track_select(lbox.curselection()))
+        self.lbox = tk.Listbox(
+            mid_pane, listvariable=self.table_strings_var, background="light blue"
+        )
+        self.lbox.pack(fill="both")
+        self.lbox.bind(
+            "<<ListboxSelect>>",
+            lambda e: self.track_select(self.lbox.curselection()),
+        )
 
-        self.waveform = tk.Canvas(mid_pane)
+        self.waveform = tk.Canvas(mid_pane, background="light blue")
         self.waveform.pack(fill="both")
         self.waveform.bind("<Button-1>", lambda event: self.seek(event.x))
 
         bottom_pane = tk.Frame(self.root)
-        tk.Button(bottom_pane, text="play", command=self.play).pack(side="left")
+        tk.Button(bottom_pane, text="play", command=self.player.play).pack(side="left")
         tk.Button(bottom_pane, text="pause", command=self.player.pause).pack(
             side="left"
         )
         tk.Button(bottom_pane, text="stop", command=self.stop).pack(side="left")
+        tk.Button(
+            bottom_pane,
+            text="remove track",
+            command=lambda: self.remove_track(self.lbox.curselection()),
+        ).pack(side="right")
 
         top_pane.pack(fill="x")
         mid_pane.pack(fill="both")
@@ -63,6 +75,16 @@ class GUI:
         self.update_waveform_playhead()
         self.update_waveform_resize()
 
+        self.loading = False
+
+        self.listened_color = "blue"
+        self.unlistened_color = "dark blue"
+
+        self.playing_animation = AsciiAnimamtion("☆*。★ﾟ*♪ヾ(☆ゝз・)ノ", 100)
+        self.loading_animaiton = AsciiAnimamtion("loading    (°▽°)   ", 100)
+        self.sitting_animation = AsciiAnimamtion("(◕‿◕)    ", 100)
+        self.update_animations()
+
     def key_press(self, event):
         if self.player.is_playing():
             self.player.pause()
@@ -71,8 +93,8 @@ class GUI:
 
     def set_lufs_status(self):
         self.player.set_lufs_mode(self.lufs_var.get())
-        if self.player.songs:
-            self.get_waveform()
+        self.new_waveform()
+        self.playhead = 0
 
     def space_bar(self, event):
         if self.player.is_playing():
@@ -88,30 +110,48 @@ class GUI:
         self.root.mainloop()
 
     def load_files(self):
-        self.player.add_files(tkinter.filedialog.askopenfilenames())
+        self.loading = True
+        if (
+            self.player.add_files(tkinter.filedialog.askopenfilenames())
+            == "fresh start"
+        ):
+            self.new_waveform()
         self.update_table()
+        self.loading = False
 
     def update_table(self):
         names = self.player.get_strings()
         self.table_strings_var.set(names)
 
-    def play(self):
-        if not self.player.songs:
+    def remove_track(self, selection):
+        if not selection:
             return
-        if self.player.current_track == -1:
-            self.player.set_current_track(0)
-        self.player.play()
-        self.get_waveform()
-        self.draw_waveform()
+        selection = selection[0]
+        if selection == 0:
+            self.player.remove(selection)
+            self.waveform.delete("all")
+        else:
+            self.player.remove(selection)
+            new_track = selection - 1 if selection > 0 else selection
+            self.player.set_current_track(new_track)
+            self.new_waveform()
 
     def track_select(self, selection):
-        if not self.player.songs:
+        if not selection:
             return
-        self.player.set_current_track(selection[0])
+        selection = selection[0]
+        code = self.player.set_current_track(selection)
+        if code == "no tracks":
+            return
+        elif code != "no_change":
+            self.new_waveform()
+            self.playhead = 0
         self.player.play()
-        self.get_waveform()
-        self.draw_waveform()
-        self.playhead = 0
+
+    def new_waveform(self):
+        if self.player.tracks:
+            self.get_waveform()
+            self.draw_waveform()
 
     def get_waveform(self):
         width = self.waveform.winfo_width()
@@ -125,29 +165,37 @@ class GUI:
     def draw_waveform(self):
         self.waveform.delete("all")
         height = self.waveform.winfo_height()
-        ratio_played = self.player.ratio_played()
-        cutoff = int(len(self.bars) * ratio_played)
         for i, bar in enumerate(self.bars):
-            self.waveform.create_line(i, height, i, height - bar, fill="black", width=1)
+            self.waveform.create_line(
+                i, height, i, height - bar, fill=self.unlistened_color, width=1
+            )
 
     def seek(self, loc):
         self.player.seek_to_ratio(loc / self.waveform.winfo_width())
+        if self.player.has_active_track():
+            self.update_waveform()
+
+    def update_waveform(self):
+        player_playhead = int(self.player.ratio_played() * len(self.bars))
+        diff = player_playhead - self.playhead
+        if diff != 0:
+            offsets = list(range(0, diff, 1 if diff >= 0 else -1))
+            locs = [offset + self.playhead for offset in offsets]
+            locs = np.clip(locs, a_min=None, a_max=len(self.bars) - 1)
+            colors = [
+                self.listened_color if diff >= 0 else self.unlistened_color
+                for _ in locs
+            ]
+            height = self.waveform.winfo_height()
+            for loc, color in zip(locs, colors):
+                self.waveform.create_line(
+                    loc, height, loc, height - self.bars[loc], fill=color, width=1
+                )
+            self.playhead = player_playhead
 
     def update_waveform_playhead(self):
         if self.player.is_playing():
-            player_playhead = int(self.player.ratio_played() * len(self.bars))
-            diff = player_playhead - self.playhead
-            if diff != 0:
-                offsets = list(range(0, diff, 1 if diff >= 0 else -1))
-                locs = [offset + self.playhead for offset in offsets]
-                colors = ["grey" if diff >= 0 else "black" for _ in locs]
-                height = self.waveform.winfo_height()
-                for loc, color in zip(locs, colors):
-                    self.waveform.create_line(
-                        loc, height, loc, height - self.bars[loc], fill=color, width=1
-                    )
-                self.playhead = player_playhead
-
+            self.update_waveform()
         self.root.after(10, self.update_waveform_playhead)
 
     def update_waveform_resize(self):
@@ -155,23 +203,55 @@ class GUI:
             self.player.current_track != -1
             and self.waveform_width != self.waveform.winfo_width()
         ):
-            self.get_waveform()
-            self.draw_waveform()
+            self.new_waveform()
             self.waveform_width = self.waveform.winfo_width()
             self.playhead = 0
         self.root.after(200, self.update_waveform_resize)
+
+    def update_animations(self):
+        if self.player.is_playing():
+            names = self.player.get_strings()
+            current_name = self.player.current_track.string
+            for i, name in enumerate(names):
+                if name == current_name:
+                    names[i] += "    ::::   " + self.playing_animation.step()
+            self.table_strings_var.set(names)
+        if self.loading:
+            self.status.insert(1.0, self.loading_animaiton.step())
+        else:
+            self.status.insert(1.0, self.sitting_animation.step())
+
+        self.root.after(500, self.update_animations)
+
+
+class AsciiAnimamtion:
+    def __init__(self, seed, repeats):
+        animation = []
+        for _ in range(len(seed)):
+            animation.append(seed)
+            seed = seed[-1] + seed[:-1]
+        self.animation = [x * repeats for x in animation]
+        self.count = 0
+
+    def step(self):
+        frame = self.animation[self.count]
+        self.count = (self.count + 1) % len(self.animation)
+        return frame
 
 
 class Player:
     def __init__(self):
         self.current_track = -1
-        self.songs = []
+        self.tracks = []
         self.playhead = 0
         self.current_sample = 0
         self.sample_rate = 0
         self.quietest = -14
         self.stream = sd.OutputStream()
         self.lufs_mode = "raw"
+
+    def has_active_track(self):
+        return self.current_track != -1
 
     def is_playing(self):
         return self.stream.active
@@ -181,13 +261,28 @@ class Player:
             return 0
         return self.playhead / self.current_track.length_secs
 
+    def remove(self, track_num):
+        if self.current_track == -1:
+            return
+        del self.tracks[track_num]
+        if not self.tracks:
+            self.current_track = -1
+
     def load_samples(self, outdata, frames, time, status):
-        outdata[:] = self.current_track.get_data(
+        data = self.current_track.get_data(
             self.current_sample,
             self.current_sample + frames,
             self.lufs_mode,
             self.quietest,
         )
+        if len(data) == 0:  # song finished
+            self.stop()
+            return
+        elif len(data) < len(outdata):  # remainder < buffer
+            outdata[:] = np.zeros_like(outdata)
+            outdata[: len(data)] = data
+        else:  # plently left
+            outdata[:] = data
         self.current_sample += frames
         self.playhead = self.current_sample / self.sample_rate
 
@@ -198,37 +293,44 @@ class Player:
         return self.current_track.get_data(0, -1, self.lufs_mode, self.quietest)
 
     def seek_to_ratio(self, ratio):
+        if self.current_track == -1:
+            return
         self.playhead = self.current_track.length_secs * ratio
         self.current_sample = int(len(self.current_track.data) * ratio)
 
     def add_files(self, new_files_paths):
         for path in new_files_paths:
             try:
-                self.songs.append(Song(path))
+                self.tracks.append(Song(path))
             except sf.LibsndfileError:
                 pass
-        self.quietest = np.min([song.lufs for song in self.songs])
+        self.quietest = np.min([song.lufs for song in self.tracks])
+        if self.current_track == -1 and self.tracks:  # first start
+            self.set_current_track(0)
+            return "first start"
 
     def set_current_track(self, track_num):
-        if not self.songs:
-            return
-        self.current_track = self.songs[track_num]
+        if self.current_track == self.tracks[track_num]:
+            return "no change"
+        elif not self.tracks:
+            return "no tracks"
+        self.current_track = self.tracks[track_num]
         if self.current_track.sample_rate != self.sample_rate:
+            self.stream.close()
             self.sample_rate = self.current_track.sample_rate
             self.stream = sd.OutputStream(
                 samplerate=self.sample_rate, callback=self.load_samples
             )
-            self.current_sample = self.playhead * self.sample_rate
+            self.current_sample = int(self.playhead * self.sample_rate)
 
     def get_strings(self):
-        return [song.string for song in self.songs]
+        return [track.string for track in self.tracks]
 
     def play(self):
-        # if not self.songs:
-        #     return
-        # if self.current_track == -1:
-        #     self.set_current_track(0)
+        if self.current_track == -1:
+            return
         self.stream.start()
+        print(f"playing {self.current_track.string}")
 
     def pause(self):
         self.stream.stop()
@@ -261,7 +363,7 @@ class Song:
     def get_string(self):
         name = Path(self.path).stem
         lufs = "{:.1f}".format(self.lufs)
-        return f"{lufs}   {name}"
+        return f"original lufs: {lufs}  | file name: {name}"
 
     def get_data(self, start, end, lufs_mode, quietest):
         match lufs_mode:
@@ -274,6 +376,7 @@ class Song:
                 self.currently_playing = self.mixing_data
             case "mastering":
                 self.currently_playing = self.mastering_data
+
         to_play = self.currently_playing[start:end, :]
         return to_play
 
