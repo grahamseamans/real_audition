@@ -7,6 +7,12 @@ import tkinter as tk
 from pathlib import Path
 from ttkthemes import ThemedTk
 
+"""
+toggle animations
+check for clipping and turn down for mixing -
+maybe keep on turning down lufs by 1 until no clipping errors occour?
+"""
+
 
 class GUI:
     def __init__(self):
@@ -15,10 +21,12 @@ class GUI:
         self.root = ThemedTk(theme="scidpink")
         self.root.title("true audition")
         self.root.geometry("920x500+290+85")
+        self.padx = 3
+        self.pady = 0
 
         top_pane = tk.Frame(self.root)
         tk.Button(top_pane, text="load files", command=self.load_files).pack(
-            side="left"
+            side="left", padx=self.padx
         )
         self.lufs_var = tk.StringVar()
         radio_values = {
@@ -29,13 +37,13 @@ class GUI:
         for text, value in radio_values.items():
             tk.Radiobutton(
                 top_pane, text=text, variable=self.lufs_var, value=value
-            ).pack(side="right")
+            ).pack(side="right", padx=self.padx)
         self.lufs_var.trace_add(
             "write", callback=lambda var, index, mode: self.set_lufs_status()
         )
         self.lufs_var.set("raw")
         self.status = tk.Text(top_pane, height=1, background="light blue")
-        self.status.pack(side="left")
+        self.status.pack(side="left", padx=self.padx, pady=self.pady)
 
         mid_pane = tk.Frame(self.root)
         self.table_strings_var = tk.StringVar(value=[])
@@ -214,7 +222,7 @@ class GUI:
             current_name = self.player.current_track.string
             for i, name in enumerate(names):
                 if name == current_name:
-                    names[i] += "    ::::   " + self.playing_animation.step()
+                    names[i] += "  |  " + self.playing_animation.step()
             self.table_strings_var.set(names)
         if self.loading:
             self.status.insert(1.0, self.loading_animaiton.step())
@@ -225,18 +233,24 @@ class GUI:
 
 
 class AsciiAnimamtion:
-    def __init__(self, seed, repeats):
-        animation = []
-        for _ in range(len(seed)):
-            animation.append(seed)
-            seed = seed[-1] + seed[:-1]
-        self.animation = [x * repeats for x in animation]
-        self.count = 0
+    def __init__(self, seed, repeats, direction="right"):
+        self.frame = seed
+        self.repeats = repeats
+        if direction == "left":
+            self.anim_func = self.backward_turn
+        else:
+            self.anim_func = self.forward_turn
 
     def step(self):
-        frame = self.animation[self.count]
-        self.count = (self.count + 1) % len(self.animation)
+        frame = self.frame * self.repeats
+        self.frame = self.anim_func(self.frame)
         return frame
+
+    def forward_turn(self, frame):
+        return frame[-1] + frame[:-1]
+
+    def backward_turn(self, frame):
+        return frame[1:] + frame[0]
 
 
 class Player:
