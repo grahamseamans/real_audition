@@ -46,7 +46,7 @@ class GUI:
         self.waveform.bind("<Button-1>", lambda event: self.seek(event.x))
 
         bottom_pane = tk.Frame(self.root)
-        tk.Button(bottom_pane, text="play", command=self.player.play).pack(side="left")
+        tk.Button(bottom_pane, text="play", command=self.play).pack(side="left")
         tk.Button(bottom_pane, text="pause", command=self.player.pause).pack(
             side="left"
         )
@@ -58,7 +58,10 @@ class GUI:
 
         self.root.bind("<Key>", lambda e: self.key_press(e))
 
-        self.update_play()
+        self.playhead = 0
+        self.waveform_width = self.waveform.winfo_width()
+        self.update_waveform_playhead()
+        self.update_waveform_resize()
 
     def key_press(self, event):
         if self.player.is_playing():
@@ -68,7 +71,8 @@ class GUI:
 
     def set_lufs_status(self):
         self.player.set_lufs_mode(self.lufs_var.get())
-        self.get_waveform()
+        if self.player.songs:
+            self.get_waveform()
 
     def space_bar(self, event):
         if self.player.is_playing():
@@ -91,10 +95,23 @@ class GUI:
         names = self.player.get_strings()
         self.table_strings_var.set(names)
 
+    def play(self):
+        if not self.player.songs:
+            return
+        if self.player.current_track == -1:
+            self.player.set_current_track(0)
+        self.player.play()
+        self.get_waveform()
+        self.draw_waveform()
+
     def track_select(self, selection):
+        if not self.player.songs:
+            return
         self.player.set_current_track(selection[0])
         self.player.play()
         self.get_waveform()
+        self.draw_waveform()
+        self.playhead = 0
 
     def get_waveform(self):
         width = self.waveform.winfo_width()
@@ -111,21 +128,38 @@ class GUI:
         ratio_played = self.player.ratio_played()
         cutoff = int(len(self.bars) * ratio_played)
         for i, bar in enumerate(self.bars):
-            color = "grey" if i < cutoff else "black"
-            self.waveform.create_line(i, height, i, height - bar, fill=color, width=1)
+            self.waveform.create_line(i, height, i, height - bar, fill="black", width=1)
 
     def seek(self, loc):
-        self.player.seeked_to_ratio(loc / self.waveform.winfo_width())
+        self.player.seek_to_ratio(loc / self.waveform.winfo_width())
 
-    def update_play(self):
-        try:
-            if self.player.is_playing():
-                self.draw_waveform()
-        except RuntimeError:
-            pass
-        except sd.PortAudioError:
-            pass
-        self.root.after(10, self.update_play)
+    def update_waveform_playhead(self):
+        if self.player.is_playing():
+            player_playhead = int(self.player.ratio_played() * len(self.bars))
+            diff = player_playhead - self.playhead
+            if diff != 0:
+                offsets = list(range(0, diff, 1 if diff >= 0 else -1))
+                locs = [offset + self.playhead for offset in offsets]
+                colors = ["grey" if diff >= 0 else "black" for _ in locs]
+                height = self.waveform.winfo_height()
+                for loc, color in zip(locs, colors):
+                    self.waveform.create_line(
+                        loc, height, loc, height - self.bars[loc], fill=color, width=1
+                    )
+                self.playhead = player_playhead
+
+        self.root.after(10, self.update_waveform_playhead)
+
+    def update_waveform_resize(self):
+        if (
+            self.player.current_track != -1
+            and self.waveform_width != self.waveform.winfo_width()
+        ):
+            self.get_waveform()
+            self.draw_waveform()
+            self.waveform_width = self.waveform.winfo_width()
+            self.playhead = 0
+        self.root.after(200, self.update_waveform_resize)
 
 
 class Player:
@@ -158,10 +192,14 @@ class Player:
         self.playhead = self.current_sample / self.sample_rate
 
     def set_lufs_mode(self, mode):
-        self.plufs_mode = mode
+        self.lufs_mode = mode
 
     def get_currently_playing_data(self):
         return self.current_track.get_data(0, -1, self.lufs_mode, self.quietest)
+
+    def seek_to_ratio(self, ratio):
+        self.playhead = self.current_track.length_secs * ratio
+        self.current_sample = int(len(self.current_track.data) * ratio)
 
     def add_files(self, new_files_paths):
         for path in new_files_paths:
@@ -186,12 +224,11 @@ class Player:
         return [song.string for song in self.songs]
 
     def play(self):
-        if not self.songs:
-            return
-        if self.current_track == -1:
-            self.current_track = 0
-        else:
-            self.stream.start()
+        # if not self.songs:
+        #     return
+        # if self.current_track == -1:
+        #     self.set_current_track(0)
+        self.stream.start()
 
     def pause(self):
         self.stream.stop()
@@ -239,33 +276,12 @@ class Song:
                 self.currently_playing = self.mastering_data
         to_play = self.currently_playing[start:end, :]
         return to_play
-        # to_play = self.fade_in(to_play)
-        # sd.play(to_play, self.sample_rate, device=device)
 
-    # def fade_in(self, data):
-    #     fade_len = 20
-    #     fade = np.expand_dims(np.linspace(0, 1, fade_len), axis=1)
-    #     data[:fade_len, :] *= fade
-    #     return data
-
-    # def stop_play(self):
-    #     sd.stop()
-
-
-class Duration:
-    def __init__(self):
-        self.last_call = 0
-        self.duration = 0
-
-    def update(self, current_time):
-        self.duration += current_time - self.last_call
-        self.last_call = current_time
-
-    def reset(self, time=0):
-        self.duration = time
-
-    def start(self, starting_time):
-        self.last_call = starting_time
+    def fade_in(self, data):
+        fade_len = 20
+        fade = np.expand_dims(np.linspace(0, 1, fade_len), axis=1)
+        data[:fade_len, :] *= fade
+        return data
 
 
 if __name__ == "__main__":
