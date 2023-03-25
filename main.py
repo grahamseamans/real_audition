@@ -8,14 +8,6 @@ from pathlib import Path
 from ttkthemes import ThemedTk
 import ttkthemes
 
-"""
-toggle animations
-check for clipping and turn down for mixing -
-maybe keep on turning down lufs by 1 until no clipping errors occour?
-but I never set sometihing to a louder lufs than it currently has
-- how can things clip when I turn them down?
-"""
-
 
 class GUI:
     def __init__(self):
@@ -31,6 +23,22 @@ class GUI:
         tk.Button(top_pane, text="load files", command=self.load_files).pack(
             side="left"
         )
+        self.output_device_var = tkinter.StringVar(self.root)
+        # self.output_devices_var = tkinter.StringVar(self.root)
+        self.output_device_var.set(self.player.device)
+        output_devices = [
+            device["name"]
+            for device in sd.query_devices()
+            if device["max_output_channels"] > 0
+        ]
+        self.output_device_menu = tkinter.OptionMenu(
+            top_pane, self.output_device_var, *output_devices
+        )
+        self.output_device_menu.pack(side="left")
+        self.output_device_var.trace_add(
+            "write", callback=lambda var, index, mode: self.output_device_changed()
+        )
+
         self.lufs_var = tk.StringVar()
         radio_values = {
             "raw": "raw",
@@ -71,12 +79,12 @@ class GUI:
             side="left"
         )
         tk.Button(bottom_pane, text="stop", command=self.stop).pack(side="left")
+
         tk.Button(
             bottom_pane,
             text="remove track",
             command=lambda: self.remove_track(self.lbox.curselection()),
         ).pack(side="right")
-
         top_pane.pack(fill="x")
         mid_pane.pack(fill="both")
         bottom_pane.pack(fill="x")
@@ -96,21 +104,24 @@ class GUI:
         self.playing_animation = AsciiAnimamtion("☆*。★ﾟ*♪ヾ(☆ゝз・)ノ    ", 100)
         self.loading_animaiton = AsciiAnimamtion("loading    (＠_＠)    ", 100)
         self.sitting_animation = AsciiAnimamtion("(◕‿◕)    ", 100)
-        self.clipping_animation = AsciiAnimamtion(
-            "probably clipping    (ﾒ` ﾛ ´)    ", 100
-        )
+        self.clipping_animation = AsciiAnimamtion("probably clips    (ﾒ` ﾛ ´)    ", 100)
         self.update_animations()
 
         self.clipping_text = None
 
         self.do_padding(self.root)
 
-    def do_padding(self, frame):
-        for child in frame.winfo_children():
+    def output_device_changed(self):
+        self.player.set_output_device(self.output_device_var.get())
+
+    def do_padding(self, obj):
+        for child in obj.winfo_children():
             self.do_padding(child)
-        f_ty = type(frame)
-        if f_ty != ttkthemes.themed_tk.ThemedTk and f_ty != tk.Frame:
-            frame.pack_configure(padx=self.padx, pady=self.pady)
+        if type(obj) != tk.Frame:
+            try:
+                obj.pack_configure(padx=self.padx, pady=self.pady)
+            except:
+                print(f"cant add padding to {obj}")
 
     def key_press(self, event):
         if self.player.is_playing():
@@ -120,9 +131,8 @@ class GUI:
 
     def set_lufs_status(self):
         self.player.set_lufs_mode(self.lufs_var.get())
-        self.new_waveform()
-        self.playhead = 0
-        self.update_waveform()
+        if self.player.tracks:
+            self.new_waveform()
 
     def space_bar(self, event):
         if self.player.is_playing():
@@ -139,11 +149,8 @@ class GUI:
 
     def load_files(self):
         self.loading = True
-        if (
-            self.player.add_files(tkinter.filedialog.askopenfilenames())
-            == "fresh start"
-        ):
-            self.new_waveform()
+        self.player.add_files(tkinter.filedialog.askopenfilenames())
+        self.new_waveform()
         self.update_table()
         self.loading = False
 
@@ -180,12 +187,12 @@ class GUI:
             return
         elif code != "no_change":
             self.new_waveform()
-            self.playhead = 0
         self.player.play()
 
     def new_waveform(self):
         if self.player.tracks:
             self.get_waveform()
+            self.playhead = 0
             self.draw_waveform()
 
     def get_waveform(self):
@@ -241,10 +248,10 @@ class GUI:
         ):
             self.new_waveform()
             self.waveform_width = self.waveform.winfo_width()
-            self.playhead = 0
         self.root.after(200, self.update_waveform_resize)
 
     def update_animations(self):
+        # playing anim
         if self.player.is_playing():
             names = self.player.get_strings()
             current_name = self.player.current_track.string
@@ -252,10 +259,13 @@ class GUI:
                 if name == current_name:
                     names[i] += "  |  " + self.playing_animation.step()
             self.table_strings_var.set(names)
+        # status anim
+        self.status.delete(1.0, "end")
         if self.loading:
             self.status.insert(1.0, self.loading_animaiton.step())
         else:
             self.status.insert(1.0, self.sitting_animation.step())
+        # clipping anim
         if self.player.clipping:
             if self.clipping_text:
                 self.waveform.delete(self.clipping_text)
@@ -297,14 +307,41 @@ class Player:
         self.stream = sd.OutputStream()
         self.lufs_mode = "raw"
         self.clipping = False
+        self.device = sd.query_devices()[sd.default.device[1]]["name"]
 
     def has_active_track(self):
         return self.current_track != None
+
+    def get_output_devices(self):
+        return [
+            device["name"]
+            for device in sd.query_devices()
+            if device["max_output_channels"] > 0
+        ]
+
+    def get_device_number(self):
+        for device in sd.query_devices():
+            if device["name"] == self.device:
+                return device["index"]
+        Warning("Device not found, using default")
+        return [sd.default.device[1]]
+
+    def set_output_device(self, device):
+        was_playing = self.is_playing()
+        print(f"changing device to {device}")
+        if device == self.device:
+            return
+        self.device = device
+        self.new_stream()
+        if was_playing:
+            self.play()
 
     def is_playing(self):
         return self.stream.active
 
     def ratio_played(self):
+        if self.current_track == None:
+            return 0
         if self.current_track.length_secs == 0:
             return 0
         return self.playhead / self.current_track.length_secs
@@ -366,6 +403,8 @@ class Player:
 
     def get_mixing_lufs(self):
         mixing_lufs = np.min([song.lufs for song in self.tracks])
+        for track in self.tracks:
+            track.make_mixing_data(mixing_lufs)
         while self.check_mix_clipped():
             for track in self.tracks:
                 track.make_mixing_data(mixing_lufs)
@@ -389,12 +428,17 @@ class Player:
         self.current_track = self.tracks[track_num]
         self.check_clipped()
         if self.current_track.sample_rate != self.sample_rate:
-            self.stream.close()
             self.sample_rate = self.current_track.sample_rate
-            self.stream = sd.OutputStream(
-                samplerate=self.sample_rate, callback=self.load_samples
-            )
+            self.new_stream()
             self.current_sample = int(self.playhead * self.sample_rate)
+
+    def new_stream(self):
+        self.stream.close()
+        self.stream = sd.OutputStream(
+            device=self.get_device_number(),
+            samplerate=self.sample_rate,
+            callback=self.load_samples,
+        )
 
     def get_strings(self):
         return [track.string for track in self.tracks]
@@ -436,7 +480,10 @@ class Song:
     def get_string(self):
         name = Path(self.path).stem
         lufs = "{:.1f}".format(self.lufs)
-        return f"original lufs: {lufs}  |  file name: {name}"
+        str = f"{lufs}  |  {name}"
+        if self.check_clipped("raw"):
+            str = f"{str}  |  clipping! (is it an mp3?)"
+        return str
 
     def make_mixing_data(self, lufs):
         self.mixing_data = self.normalize_data(lufs)
