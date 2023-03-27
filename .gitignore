@@ -1,3 +1,5 @@
 *.wav
-
 real_audition_venv/
+build/
+dist/
+main.spec

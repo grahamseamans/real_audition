@@ -121,7 +121,7 @@ class GUI:
             try:
                 obj.pack_configure(padx=self.padx, pady=self.pady)
             except:
-                print(f"cant add padding to {obj}")
+                pass
 
     def key_press(self, event):
         if self.player.is_playing():
@@ -328,7 +328,6 @@ class Player:
 
     def set_output_device(self, device):
         was_playing = self.is_playing()
-        print(f"changing device to {device}")
         if device == self.device:
             return
         self.device = device
@@ -409,7 +408,6 @@ class Player:
             for track in self.tracks:
                 track.make_mixing_data(mixing_lufs)
             mixing_lufs -= 1
-        print(f"mixing lufs: {mixing_lufs}")
 
     def check_mix_clipped(self):
         return any([track.check_clipped("mixing") for track in self.tracks])
@@ -447,7 +445,6 @@ class Player:
         if self.current_track == None:
             return
         self.stream.start()
-        print(f"playing {self.current_track.string}")
 
     def pause(self):
         self.stream.stop()
