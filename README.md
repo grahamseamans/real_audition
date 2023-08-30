@@ -4,11 +4,11 @@ real_audition allows LUFS matched playback of audio files. It's hard to know whi
 # Features
 - Loudness normalization!
 - Plays most audio files
-- sick gui filled with kaomojis °˖✧◝(⁰▿⁰)◜✧˖°
+- Sick gui filled with kaomojis °˖✧◝(⁰▿⁰)◜✧˖°
 
 # How it works - the three modes
 - Normalize lufs of all files to be the same as the quietest file
-- Any track greater than 14 lufs gets turned down to 14 lufs (mimmics playback on streaming services like Spotify)
+- Any track greater than 14 lufs gets turned down to 14 lufs (mimics playback on streaming services like Spotify)
 - No loudness normalization
 
 # Available on
